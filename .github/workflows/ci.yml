@@ -1,0 +1,73 @@
+# Builds and tests every addon on Windows and Linux for every push and pull request.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: ue-dev-hub-addons
+          persist-credentials: false
+
+      # The addons use the hub's SDK crate and addon API types from a checkout next to this one.
+      # HUB_TOKEN is only needed while the hub repository is private.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: chillpert/ue-dev-hub
+          token: ${{ secrets.HUB_TOKEN || github.token }}
+          ref: ${{ vars.HUB_REF || 'main' }}
+          path: ue-dev-hub
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ue-dev-hub-addons/package-lock.json
+
+      # The version, clippy and rustfmt come from rust-toolchain.toml.
+      - name: Install Rust
+        working-directory: ue-dev-hub-addons
+        run: rustup toolchain install
+
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: ue-dev-hub-addons/addons/git/helper
+
+      - working-directory: ue-dev-hub-addons
+        run: npm ci
+
+      - name: Check the pages
+        working-directory: ue-dev-hub-addons
+        run: npx tsc --noEmit
+
+      - name: Test and lint the helpers
+        working-directory: ue-dev-hub-addons/addons/git/helper
+        run: |
+          git config --global user.name CI
+          git config --global user.email ci@example.com
+          cargo test
+          cargo clippy --all-targets -- -D warnings
+
+      - name: Build and pack
+        working-directory: ue-dev-hub-addons
+        run: |
+          npm run build
+          npm run pack

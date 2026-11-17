@@ -1,0 +1,18 @@
+{
+  "name": "ue-dev-hub-addons",
+  "private": true,
+  "version": "0.0.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "node scripts/build.mjs",
+    "pack": "node scripts/pack.mjs",
+    "index": "node scripts/index.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.16"
+  }
+}

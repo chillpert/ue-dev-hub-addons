@@ -1,0 +1,143 @@
+# Releases one addon when a tag like git-v1.2.0 is pushed: builds it for Windows and Linux, signs
+# the zips with the addons key, publishes them as a release, and updates index.json on the rolling
+# "index" release that the hub reads.
+#
+# Needs the repository secret ADDONS_SIGNING_KEY (the content of the addons private key file) and,
+# if the key has one, ADDONS_SIGNING_KEY_PASSWORD. The hub can only download the files once
+# this repository is public.
+#
+# The SDK comes from the hub repository at the variable HUB_RELEASE_REF (a hub tag,
+# so releases build against a fixed SDK), else HUB_REF, else main.
+name: Release
+
+on:
+  push:
+    tags: ["*-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    outputs:
+      id: ${{ steps.tag.outputs.id }}
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check the tag matches the addon's version
+        id: tag
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          id="${tag%-v*}"
+          version="${tag##*-v}"
+          case "$id" in ""|*[!a-z0-9_-]*) echo "'$id' isn't an addon id."; exit 1 ;; esac
+          toml="addons/$id/addon.toml"
+          test -f "$toml" || { echo "There's no addon '$id'."; exit 1; }
+          grep -qxF "version = \"$version\"" "$toml" || { echo "$toml doesn't have version $version. Bump it first."; exit 1; }
+          cargo="addons/$id/helper/Cargo.toml"
+          if [ -f "$cargo" ]; then
+            grep -qxF "version = \"$version\"" "$cargo" || { echo "$cargo doesn't have version $version. Bump it together with addon.toml."; exit 1; }
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: ue-dev-hub-addons
+          persist-credentials: false
+      # HUB_TOKEN is only needed while the hub repository is private.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: chillpert/ue-dev-hub
+          token: ${{ secrets.HUB_TOKEN || github.token }}
+          ref: ${{ vars.HUB_RELEASE_REF || vars.HUB_REF || 'main' }}
+          path: ue-dev-hub
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      # The version, clippy and rustfmt come from rust-toolchain.toml.
+      - name: Install Rust
+        working-directory: ue-dev-hub-addons
+        run: rustup toolchain install
+      - working-directory: ue-dev-hub-addons
+        run: npm ci
+      - name: Test, build and pack
+        working-directory: ue-dev-hub-addons
+        shell: bash
+        env:
+          ADDON_ID: ${{ needs.check.outputs.id }}
+        run: |
+          git config --global user.name CI
+          git config --global user.email ci@example.com
+          if [ -f "addons/$ADDON_ID/helper/Cargo.toml" ]; then (cd "addons/$ADDON_ID/helper" && cargo test); fi
+          npm run build -- "$ADDON_ID"
+          npm run pack -- "$ADDON_ID"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zip-${{ matrix.os }}
+          path: ue-dev-hub-addons/out/*.zip
+
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    # Every release reads, merges and uploads index.json, so releases of different addons take turns.
+    concurrency:
+      group: addons-index
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: zip-*
+          path: out
+          merge-multiple: true
+      - name: Read the current index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # Start from an empty index only when there's no index release yet. Any other failure
+          # stops here: publishing a nearly empty index would drop every other addon.
+          if said=$(gh release view index 2>&1 >/dev/null); then
+            gh release download index --pattern index.json --output previous-index.json
+          elif echo "$said" | grep -qi "release not found"; then
+            echo '{"addons":[]}' > previous-index.json
+          else
+            echo "$said"
+            exit 1
+          fi
+      - name: Sign and write the index
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.ADDONS_SIGNING_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.ADDONS_SIGNING_KEY_PASSWORD }}
+        run: node scripts/index.mjs --previous previous-index.json --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ADDON_ID: ${{ needs.check.outputs.id }}
+          ADDON_VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/*.zip out/*.zip.sig --title "$ADDON_ID $ADDON_VERSION" --notes "See the commits since the last release."
+          gh release view index >/dev/null 2>&1 || gh release create index --title "Addons index" --notes "The list UE Dev Hub installs addons from. Updated by every release." --latest=false
+          gh release upload index out/index.json --clobber

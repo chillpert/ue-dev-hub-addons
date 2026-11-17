@@ -1,0 +1,14 @@
+id = "git"
+name = "Git"
+description = "Commit, push, update, switch branches and stash changes without another Git program."
+version = "1.0.0"
+api = 1
+
+[[pages]]
+id = "git"
+label = "Git"
+icon = "git"
+
+[helper]
+windows = "bin/ue-dev-hub-git.exe"
+linux = "bin/ue-dev-hub-git"
