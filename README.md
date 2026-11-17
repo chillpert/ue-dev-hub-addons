@@ -55,19 +55,14 @@ tests and builds the addon on Windows and Linux, signs the zips, publishes them 
 updates `index.json` on the `index` release that hubs read.
 
 It needs the repository secret `ADDONS_SIGNING_KEY` (the content of `ue-dev-hub-addons.key`) and,
-if the key has a password, `ADDONS_SIGNING_KEY_PASSWORD`. Until the SDK is on the hub's `main`
-branch, set the repository variable `HUB_REF` to the branch that has it. To build releases
+if the key has a password, `ADDONS_SIGNING_KEY_PASSWORD`. CI builds against the hub's `main`
+branch; set the repository variable `HUB_REF` to test against another branch. To build releases
 against a fixed SDK, set the variable `HUB_RELEASE_REF` to a hub tag; releases use it
 instead of `HUB_REF`, while CI keeps testing against `HUB_REF`. Bump `version` in the
 helper's `Cargo.toml` together with `addon.toml`; the release checks both.
 
-CI and releases check out the hub repository, which is private, so both also need the secret
-`HUB_TOKEN`: a fine-grained token with read-only Contents access to `chillpert/ue-dev-hub`.
-Once the hub is public, delete the secret; the workflows then use their own token.
-
-While this repository is private, hubs can't download from it: install from a zip instead.
-Once it's public, official addons install and update from the hub, and projects that list
-an addon in `[addons] default` get it by themselves.
+Official addons install and update from the hub, and projects that list an addon in
+`[addons] default` get it by themselves.
 
 ## License
 

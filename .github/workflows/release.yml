@@ -56,11 +56,9 @@ jobs:
         with:
           path: ue-dev-hub-addons
           persist-credentials: false
-      # HUB_TOKEN is only needed while the hub repository is private.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: chillpert/ue-dev-hub
-          token: ${{ secrets.HUB_TOKEN || github.token }}
           ref: ${{ vars.HUB_RELEASE_REF || vars.HUB_REF || 'main' }}
           path: ue-dev-hub
           persist-credentials: false
